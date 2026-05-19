@@ -17,6 +17,11 @@ Start here: [index.md](index.md)
 - [Verifier loop](patterns/verifier-loop.md)
 - [Runtime primitives](patterns/runtime-primitives.md)
 
+## Case studies
+
+- [Google Antigravity](case-studies/google-antigravity/README.md) — how Google Deepmind's agentic IDE composes these patterns in a shipping product (six role-composed sub-agents, Sentinel cron supervisor, mandatory VICTORY AUDIT)
+- [Cursor "Grind"](case-studies/cursor/README.md) — how Cursor's swarm uses git itself as the coordination bus (Orchestrator → Planner → Workers, isolated clones, rebase-retry push, "only your commit survives")
+
 ## Core idea
 
 ```text
