@@ -31,6 +31,7 @@ parent agent
 | Subject | Patterns it composes | File |
 |---|---|---|
 | Google Antigravity IDE | tiered-hierarchical, flat-map-reduce, reviewer-swarm, verifier-loop, pipeline-handoff, background-hybrid + new sentinel-cron supervisor | [case-studies/google-antigravity](case-studies/google-antigravity/README.md) |
+| Cursor "Grind" | tiered-hierarchical, flat-map-reduce, best-of-n-worktree, background-hybrid + new git-as-bus coordination | [case-studies/cursor](case-studies/cursor/README.md) |
 
 ## Safety rules
 
