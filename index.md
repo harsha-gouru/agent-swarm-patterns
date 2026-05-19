@@ -32,7 +32,7 @@ parent agent
 |---|---|---|
 | Google Antigravity IDE | tiered-hierarchical, flat-map-reduce, reviewer-swarm, verifier-loop, pipeline-handoff, background-hybrid + new sentinel-cron supervisor | [case-studies/google-antigravity](case-studies/google-antigravity/README.md) |
 | Cursor "Grind" | tiered-hierarchical, flat-map-reduce, best-of-n-worktree, background-hybrid + new git-as-bus coordination | [case-studies/cursor](case-studies/cursor/README.md) |
-| Warp (Oz / Skills) | reviewer-swarm, flat-map-reduce, verifier-loop, background-hybrid + new skill-optimization-loop with train/test split | [case-studies/warp](case-studies/warp/README.md) |
+| Warp (Multi-Harness Orchestration) | flat-map-reduce, pipeline-handoff, background-hybrid, tiered-hierarchical + new multi-harness dispatch (Oz / ClaudeCode / OpenCode / Gemini / Codex) | [case-studies/warp](case-studies/warp/README.md) |
 
 ## Safety rules
 

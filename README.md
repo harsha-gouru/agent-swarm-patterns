@@ -21,7 +21,7 @@ Start here: [index.md](index.md)
 
 - [Google Antigravity](case-studies/google-antigravity/README.md) — how Google Deepmind's agentic IDE composes these patterns in a shipping product (six role-composed sub-agents, Sentinel cron supervisor, mandatory VICTORY AUDIT)
 - [Cursor "Grind"](case-studies/cursor/README.md) — how Cursor's swarm uses git itself as the coordination bus (Orchestrator → Planner → Workers, isolated clones, rebase-retry push, "only your commit survives")
-- [Warp (Oz / Skills)](case-studies/warp/README.md) — Anthropic-format skills shipped as Apache-2.0 plaintext, agent-driven skill optimization loop with stratified train/test split, subprocess delegation to `claude -p`
+- [Warp (Multi-Harness Orchestration)](case-studies/warp/README.md) — open-source meta-orchestrator that dispatches across 5 agent harnesses (Oz / ClaudeCode / OpenCode / Gemini / Codex), with plan-attached orchestration config + auto-launch matching, `LifecycleEventType` subscription, and a 35-tool agent surface
 
 ## Core idea
 

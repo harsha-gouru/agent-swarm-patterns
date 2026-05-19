@@ -1,6 +1,8 @@
-# Warp Skill Catalog
+# Warp Skill Bundle
 
-All skills shipped in `/Applications/Warp.app/Contents/Resources/bundled/`. Apache 2.0 licensed (each skill has its own `LICENSE.txt` where applicable).
+> This doc is about Warp's **content** layer (skills as Apache-2.0 markdown). For the actual **agentic flow** — how agents spawn each other, how they communicate, what tools they have — see [architecture.md](architecture.md), [spawn-and-messaging.md](spawn-and-messaging.md), and [tool-catalog.md](tool-catalog.md).
+
+All skills shipped in `/Applications/Warp.app/Contents/Resources/bundled/`. Apache 2.0 licensed (each skill has its own `LICENSE.txt` where applicable). Skills are referenced from the agent's protobuf surface via `SkillRef` (passed in `StartAgentV2.Remote.skills` and `RunAgents.skills`) and loaded via the `ReadSkill` tool.
 
 ## Top-level skills (`bundled/skills/`)
 

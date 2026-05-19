@@ -1,61 +1,93 @@
-# Case Study: Warp (Oz / Skills)
+# Case Study: Warp (Multi-Harness Orchestration)
 
-> Extracted from `Warp.app` v0.2026.05.18.05.32.stable_02. Unlike the other case studies in this repo, Warp's agent layer is **partially open-sourced**: the entire `Resources/bundled/skills/` directory ships as plaintext markdown + Python under **Apache License 2.0** (`LICENSE.txt` next to each `SKILL.md`). No reverse engineering of the binary needed — just read the files.
+> Sources, all public:
+> - `github.com/warpdotdev/warp` — full Rust app, ~59k stars (`crates/ai/src/agent/`)
+> - `github.com/warpdotdev/warp-proto-apis` — protobuf API definitions for the agent control plane (`apis/multi_agent/v1/`)
+> - `Warp.app/Contents/Resources/bundled/` — Apache-2.0 skill bundle
 
-Warp's design point is different from both Antigravity and Cursor:
-- It ships **Anthropic's exact skills format** (YAML frontmatter + markdown + scripts/references/assets bundled-resources tree, 3-level progressive disclosure).
-- It delegates skill execution to **`claude -p`** (Claude Code's headless mode) as a subprocess.
-- It ships an **agent-driven skill optimization loop** — an LLM iteratively rewrites a skill's description, scored against a stratified train/test split of trigger evals.
-- Cloud-agent orchestration lives in a separate CLI called **`oz`**.
+No reverse engineering required — the entire agentic surface is open-source. This case study is built from `task.proto` (1963 lines), `orchestration.proto` (67 lines), `crates/ai/src/agent/`, and a handful of supporting Rust files.
+
+## What makes Warp different
+
+Antigravity and Cursor are each tied to **one** agent runtime. Warp is a **meta-orchestrator** that dispatches across **five different agent harnesses**:
+
+```protobuf
+// orchestration.proto:14
+message Harness {
+  oneof variant {
+    Oz oz = 1;             // Warp's own
+    ClaudeCode claude_code = 2;
+    OpenCode open_code = 3;
+    Gemini gemini = 4;
+    Codex codex = 5;
+  }
+}
+```
+
+You pick the harness as part of an `OrchestrationConfig`. The same Warp app then spawns child agents that run inside that chosen harness — whether the user wants Anthropic's Claude Code loop, Google's Gemini CLI, OpenAI's Codex CLI, or Warp's own Oz harness.
 
 ## Files
 
 | File | What's in it |
 |---|---|
-| [architecture.md](architecture.md) | The Skills format, three-level progressive disclosure, Oz cloud-agent platform, subprocess-to-`claude -p` delegation, what ships in the bundle |
-| [skill-optimization-loop.md](skill-optimization-loop.md) | New pattern: agent-driven skill description optimization with stratified train/test split, eval HTML viewer, blind comparison subagents |
-| [skill-catalog.md](skill-catalog.md) | The 11 bundled skills + the 1 bundled MCP skill, with verbatim descriptions and what each does |
+| [architecture.md](architecture.md) | The 5-harness orchestration model, two execution modes (Local / Remote{environment, worker_host}), the lead/child agent topology, where each piece lives in the repo |
+| [spawn-and-messaging.md](spawn-and-messaging.md) | The four spawn primitives (`Subagent`, `StartAgent`, `StartAgentV2`, `RunAgents`), lifecycle event subscription, inter-agent `SendMessageToAgent` broadcast, cross-conversation `FetchConversation` |
+| [tool-catalog.md](tool-catalog.md) | The 35-tool agent surface from `task.proto`, with which tools are read-only, which spawn subagents, which interact with running shells, and which are deprecated |
+| [skills-bundle.md](skills-bundle.md) | The Apache-2.0 skill bundle (`Resources/bundled/skills/`), still worth documenting because that's the user-extensible surface |
 
 ## How it maps to this repo
 
-| Warp feature | Pattern in this repo |
+| Warp construct | Pattern in this repo |
 |---|---|
-| `grader` / `comparator` / `analyzer` subagents in create-skill | [reviewer-swarm](../../patterns/reviewer-swarm.md) |
-| Spawn with-skill AND baseline runs **in the same turn** for each test case | [flat-map-reduce](../../patterns/flat-map-reduce.md) |
-| Blind A/B comparison (comparator doesn't know which side is which) | [verifier-loop](../../patterns/verifier-loop.md) with anti-bias scaffold |
-| Iterate up to 5 rounds, pick best by test (not train) score | **NEW** — see [skill-optimization-loop.md](skill-optimization-loop.md) |
-| `oz` CLI for cloud-agent runs | [background-hybrid-swarm](../../patterns/background-hybrid-swarm.md) |
-| Skills bundling scripts that execute without loading into context | [runtime-primitives](../../patterns/runtime-primitives.md) — progressive disclosure |
+| `RunAgents` (batch spawn, shared run-wide config) | [flat-map-reduce](../../patterns/flat-map-reduce.md) |
+| `StartAgentV2` with `LifecycleSubscription` | [background-hybrid-swarm](../../patterns/background-hybrid-swarm.md) with explicit event subscription |
+| `OrchestrationConfig` + `Approved` status → auto-launch matching `RunAgents` | [pipeline-handoff-swarm](../../patterns/pipeline-handoff-swarm.md) (the plan is the handoff carrier) |
+| Per-call harness selection across Oz / ClaudeCode / OpenCode / Gemini / Codex | **NEW** — see [architecture.md](architecture.md) |
+| `SendMessageToAgent.addresses` repeated string + `FetchConversation` | A weak [tiered-hierarchical-swarm](../../patterns/tiered-hierarchical-swarm.md) (no enforced tree shape) |
+| `RunAgents.Remote.computer_use_enabled` set per-call by the LLM | Capability negotiation, runtime decision |
 
-## What's novel here
+## What's novel here (the actual agentic-flow distinctives)
 
-1. **Skills are Apache 2.0 plaintext.** Unlike Antigravity (skills shipped via Firebase) or Cursor (subagent types compiled into a minified bundle), Warp ships its agent's instructions as readable markdown the user can edit, fork, or write from scratch. The bundled `create-skill` SKILL.md is essentially a publishable manual for the entire format.
-2. **Anthropic's skills format, verbatim.** YAML frontmatter (`name`, `description`, optional `license`, `compatibility`). Bundled resources tree: `scripts/` (executable), `references/` (load-on-demand), `assets/` (output templates). Three-level progressive disclosure (~100-word metadata always loaded → SKILL.md body when triggered → resources as needed). This is Claude Skills — Warp adopted the standard.
-3. **Agent ↔ Claude Code subprocess delegation.** `improve_description.py` and `run_eval.py` shell out to `claude -p --output-format text`. Warp's agent invokes Claude Code headless for the actual skill execution and grading. This is the first agent product I've seen explicitly composing on top of another agent product.
-4. **Train/test split on trigger queries.** The skill optimization loop generates ~20 eval queries (8-10 should-trigger, 8-10 should-not-trigger near-misses), splits 60/40 stratified, runs each query 3x for reliable trigger rates, then picks the best description by held-out test score — not train score — to avoid overfitting.
-5. **Skill-creation-by-skill.** `create-skill` is itself a skill. The agent uses a skill to write skills.
-6. **Cloud agent platform as a separate CLI.** `oz` is its own binary at `Resources/bin/oz` — agent · environment · mcp · run · model commands. Warp clearly separates "agent in your terminal" from "cloud-orchestrated agents."
+1. **Multi-harness dispatch.** Warp is the only one of the three case studies that treats the agent loop itself as pluggable. An `OrchestrationConfig` carries a `Harness` oneof: `Oz | ClaudeCode | OpenCode | Gemini | Codex`. Each child agent in a `RunAgents` batch runs in the configured harness.
+
+2. **Plan-attached orchestration config.** Approval is captured once via `OrchestrationConfigSnapshot` carried in conversation history. Subsequent `RunAgents` calls that match the active config **auto-launch without re-prompting** (`matches_active_config` in `crates/ai/src/agent/orchestration_config.rs`). Empty/unset fields on the call are treated as inheriting from the config.
+
+3. **Lifecycle event subscription.** When spawning a child via `StartAgentV2`, the parent declares which lifecycle events it wants notifications for: `IN_PROGRESS | SUCCEEDED | FAILED | ERRORED | CANCELLED | BLOCKED`. Empty subscription = subscribes to none. This is selective backpressure — the parent decides whether to wait on any signal at all.
+
+4. **Two execution modes baked into the orchestration model:**
+   - `Local` — child runs in the user's machine, same harness, same env.
+   - `Remote { environment_id, worker_host }` — child runs in a managed cloud environment with explicit worker pinning. `RunAgents.Remote.computer_use_enabled` is set by the LLM per-call based on whether the children need browser/visual capability.
+
+5. **`SendMessageToAgent.addresses repeated string`.** Inter-agent messaging is **broadcast-by-default** — one tool call delivers the same message to N child agents. Each child sees `subject` + `message`. This is multi-cast, not unicast.
+
+6. **Cross-conversation reads via `FetchConversation`.** A subagent can read another conversation's tasks by ID. "Used by subagents that need to access a different conversation's data" (verbatim comment). This is structured cross-agent context sharing — no shared filesystem (Antigravity) or shared git branch (Cursor) needed.
+
+7. **The agent surface is in `.proto`, not in the binary.** Tool definitions, agent-spawn primitives, lifecycle events — all live in `warp-proto-apis/apis/multi_agent/v1/`. The Rust client is generated from these. So the agentic flow is wire-stable across releases, and ChannelVersions-aware — see `crates/channel_versions/`.
 
 ## Reproducibility
 
-No tools needed — just open the bundle directory:
-
 ```sh
-# All the skills
-open /Applications/Warp.app/Contents/Resources/bundled/skills/
+# Clone both repos
+git clone --depth 1 https://github.com/warpdotdev/warp.git
+git clone --depth 1 https://github.com/warpdotdev/warp-proto-apis.git
 
-# Each skill is plaintext markdown + scripts:
-cat /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/SKILL.md
-ls /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/scripts/
-ls /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/agents/
+# The agent control plane (1963 lines of .proto)
+ls warp-proto-apis/apis/multi_agent/v1/
 
-# Three subagent prompts that drive the optimization loop:
-cat /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/agents/grader.md
-cat /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/agents/comparator.md
-cat /Applications/Warp.app/Contents/Resources/bundled/skills/create-skill/agents/analyzer.md
+# The 5 harnesses
+grep -A 8 "^message Harness" warp-proto-apis/apis/multi_agent/v1/orchestration.proto
 
-# Cloud-agent CLI:
-/Applications/Warp.app/Contents/Resources/bin/oz --help
+# The 35 client tools
+awk '/^    message ToolCall \{/,/^    \}/' warp-proto-apis/apis/multi_agent/v1/task.proto
+
+# The spawn primitives
+grep -A 30 "^message StartAgentV2 \{\|^message RunAgents \{" \
+  warp-proto-apis/apis/multi_agent/v1/task.proto
+
+# Rust-side orchestration config + approval logic
+cat warp/crates/ai/src/agent/orchestration_config.rs
 ```
 
-The system prompts that run *inside the Warp app itself* are not in the bundle — Warp's main system prompt is fetched at runtime from the server. So the agentic surface that's visible to us is: skills + subagent prompts + the `oz` CLI. That's enough to map the design.
+## What I had wrong before
+
+An earlier draft of this case study focused on Warp's **skills** as the headline. That was the wrong axis. Skills (and the bundled `create-skill` meta-skill, and the optimization loop) are the **user-extensibility layer** — they don't tell you anything about how Warp itself spawns and coordinates agents. The agentic flow lives in the protobuf API: `OrchestrationConfig`, `RunAgents`, `StartAgentV2`, `LifecycleEventType`, `Harness`. That's the system. Skills are content shipped on top of it.

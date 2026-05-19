@@ -1,268 +1,369 @@
 # Warp Agent Architecture
 
+All quoted material is verbatim from `warp-proto-apis/apis/multi_agent/v1/` and `warp/crates/ai/src/agent/`.
+
 ## Shape
 
 ```text
-                       ┌────────────────────────────┐
-                       │  Warp.app (terminal UI)    │
-                       │  Resources/MacOS/stable    │ ← 373 MB Rust binary
-                       │  Agent + chat + blocks     │   (system prompt server-side)
-                       └──────────┬─────────────────┘
-                                  │
-              consults at trigger time
-                                  ▼
-              ┌───────────────────────────────────────┐
-              │  Resources/bundled/skills/            │ ← Apache 2.0 plaintext
-              │  11 skills + 1 mcp_skills/figma       │
-              └────┬──────────────┬───────────────┬───┘
-                   │              │               │
-                   ▼              ▼               ▼
-            SKILL.md         scripts/         references/
-            (instructions)   (executable)     (load on demand)
+                    ┌──────────────────────────────────┐
+                    │  Lead Agent (user-facing)        │
+                    │  Runs in user's Warp terminal    │
+                    └──────────┬───────────────────────┘
+                               │
+                  emits ToolCall.tool = ...
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+        ▼                      ▼                      ▼
+    StartAgent             StartAgentV2           RunAgents
+   (single, v1)            (single, current)   (batched swarm)
+        │                      │                      │
+        │  with optional       │  with optional       │  with N AgentRunConfigs
+        │  LifecycleSubscription                      │  sharing run-wide
+        │  (which events to be │                      │  model_id, harness,
+        │   notified about)    │                      │  execution_mode, skills
+        │                      │                      │
+        ▼                      ▼                      ▼
+      ┌────────────────────────────────────────────────────┐
+      │  OrchestrationConfig                               │
+      │  • model_id                                        │
+      │  • harness ∈ { Oz, ClaudeCode, OpenCode,           │
+      │                Gemini, Codex }                     │
+      │  • execution_mode ∈ { Local, Remote{env, host} }   │
+      └────────────────────────────────────────────────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              ▼                                 ▼
+       ┌──────────────┐                  ┌──────────────┐
+       │ Local child  │                  │ Remote child │
+       │ same machine │                  │ environment_id│
+       │ same harness │                  │ worker_host   │
+       └──────────────┘                  │ computer_use? │
+                                         └──────────────┘
+              │                                 │
+              └────────────────┬────────────────┘
+                               │
+              child emits LifecycleEvent ──► parent (only if subscribed)
+                  IN_PROGRESS, SUCCEEDED, FAILED, ERRORED,
+                  CANCELLED, BLOCKED
 
-  Skills can spawn subagents and shell out to other tools:
-
-         ┌───────────────────┐
-         │  create-skill     │
-         │  • grader subagent│ ──► reads transcripts, evaluates expectations
-         │  • comparator     │ ──► blind A/B judgment, no skill identity
-         │  • analyzer       │ ──► post-hoc: WHY did the winner win?
-         └─────────┬─────────┘
-                   │
-                   ▼ (subprocess)
-         ┌───────────────────┐
-         │   claude -p       │ ← Claude Code headless
-         │   (eval execution │
-         │    + LLM-judging) │
-         └───────────────────┘
-
-  Cloud agents live elsewhere:
-
-         ┌─────────────────────────────────────────────┐
-         │  Resources/bin/oz                            │  bash launcher
-         │  "Orchestration platform for cloud agents"   │
-         │                                              │
-         │  oz agent / environment / mcp / run / model  │
-         │  • Launch and inspect cloud agents           │
-         │  • Schedule cloud agents to run in the future│
-         │  • Manage environments cloud agents run in   │
-         │  • Upload secrets to Oz's secure storage     │
-         └─────────────────────────────────────────────┘
+           parent can:
+              SendMessageToAgent (broadcast to N children by addresses[])
+              FetchConversation (read another agent's tasks)
 ```
 
-## The Skills format (Anthropic standard, Apache 2.0)
+## The orchestration config (verbatim)
 
-Verbatim from `create-skill/SKILL.md`:
+`warp-proto-apis/apis/multi_agent/v1/orchestration.proto:14`:
 
+```protobuf
+message Harness {
+  oneof variant {
+    Oz oz = 1;
+    ClaudeCode claude_code = 2;
+    OpenCode open_code = 3;
+    Gemini gemini = 4;
+    Codex codex = 5;
+  }
+  message Oz {}
+  message ClaudeCode {}
+  message OpenCode {}
+  message Gemini {}
+  message Codex {}
+}
+
+message OrchestrationConfig {
+  message Local {}
+  message Remote {
+    string environment_id = 1;
+    string worker_host = 2;
+  }
+  string model_id = 1;
+  Harness harness = 2;
+  oneof execution_mode {
+    Local local = 3;
+    Remote remote = 4;
+  }
+}
+
+message OrchestrationStatus {
+  message Approved {}
+  message Disapproved {}
+  oneof status {
+    Approved approved = 1;
+    Disapproved disapproved = 2;
+  }
+}
 ```
-skill-name/
-├── SKILL.md (required)
-│   ├── YAML frontmatter (name, description required)
-│   └── Markdown instructions
-└── Bundled Resources (optional)
-    ├── scripts/    - Executable code for deterministic/repetitive tasks
-    ├── references/ - Docs loaded into context as needed
-    └── assets/     - Files used in output (templates, icons, fonts)
+
+**The five harnesses are empty oneof variants** — they don't carry per-variant config (yet). The Rust side dispatches based on which variant is set; the harness-specific behavior is implemented client-side. Anyone adding a harness adds one line to this oneof.
+
+## The plan-attached snapshot pattern
+
+```protobuf
+message OrchestrationConfigUpdate {
+  string plan_id = 1;
+  OrchestrationConfig config = 2;
+  OrchestrationStatus status = 3;
+}
+
+message OrchestrationConfigSnapshot {
+  string plan_id = 1;
+  OrchestrationConfig config = 2;
+  OrchestrationStatus status = 3;
+}
 ```
 
-### Three-level progressive disclosure (verbatim)
+- The user edits an orchestration card attached to a plan → client emits `OrchestrationConfigUpdate` on its next outbound request.
+- The server records an `OrchestrationConfigSnapshot` in conversation history.
+- The active config = the most-recent snapshot's config + status.
 
-> Skills use a three-level loading system:
-> 1. **Metadata** (name + description) — Always in context (~100 words)
-> 2. **SKILL.md body** — In context whenever skill triggers (<500 lines ideal)
-> 3. **Bundled resources** — As needed (unlimited, scripts can execute without loading)
+## The auto-launch rule
 
-### YAML frontmatter (the minimum)
+From `warp/crates/ai/src/agent/orchestration_config.rs`:
 
-```yaml
----
-name: skill-name
-description: When this skill triggers + what it does (~100 words)
-license: Complete terms in LICENSE.txt
----
+```rust
+/// Returns `true` when the `run_agents` call's run-wide fields match
+/// the active approved `OrchestrationConfig`, meaning the confirmation
+/// card can be skipped (auto-launch).
+///
+/// Empty/unset fields on the call are treated as inheriting from the
+/// config (and therefore matching). Fields not in the config
+/// (`computer_use_enabled`, `skills`, `base_prompt`, `agent_run_configs`,
+/// per-agent `title`) are excluded from the check.
+pub fn matches_active_config(request: &RunAgentsRequest, config: &OrchestrationConfig) -> bool {
+    // model_id — empty on the call means "inherit from config" → matches.
+    if !request.model_id.is_empty() && request.model_id != config.model_id { return false; }
+    // harness_type
+    if !request.harness_type.is_empty() && request.harness_type != config.harness_type { return false; }
+    // execution_mode variant must agree.
+    // ...
+}
 ```
 
-The `compatibility` field is optional and rarely used. `license` is recommended when the skill carries Apache-style attribution.
+So the user approves a config **once**, attached to a plan. Subsequent `RunAgents` calls inside that plan that match the config (or leave fields blank to inherit) auto-launch without re-prompting. This is **trust by plan**, not trust by call.
 
-### Triggering theory (verbatim from create-skill)
+Fields explicitly **excluded** from the match (so they can vary call-to-call without breaking auto-approve):
+- `computer_use_enabled` — set per-call by the LLM based on whether children need browser/visual
+- `skills` — list of `SkillRef`s to pre-load
+- `base_prompt` — shared base prompt
+- `agent_run_configs` — the per-child list itself
+- per-agent `title`
 
-> Skills appear in the agent's `available_skills` list with their name + description, and the agent decides whether to consult a skill based on that description. The important thing to know is that the agent only consults skills for tasks it can't easily handle on its own — simple, one-step queries like "read this PDF" may not trigger a skill even if the description matches perfectly, because the agent can handle them directly with basic tools. Complex, multi-step, or specialized queries reliably trigger skills when the description matches.
+## Lifecycle events (the agent state machine)
 
-### Domain organization pattern (verbatim)
+```protobuf
+enum LifecycleEventType {
+  LIFECYCLE_EVENT_TYPE_UNSPECIFIED   = 0;
+  LIFECYCLE_EVENT_TYPE_STARTED       = 1 [deprecated = true];   // → IN_PROGRESS
+  LIFECYCLE_EVENT_TYPE_IDLE          = 2 [deprecated = true];   // → SUCCEEDED
+  LIFECYCLE_EVENT_TYPE_RESTARTED     = 3 [deprecated = true];   // → IN_PROGRESS
+  LIFECYCLE_EVENT_TYPE_ERRORED       = 4;
+  LIFECYCLE_EVENT_TYPE_CANCELLED     = 5;
+  LIFECYCLE_EVENT_TYPE_BLOCKED       = 6;
+  LIFECYCLE_EVENT_TYPE_IN_PROGRESS   = 7;
+  LIFECYCLE_EVENT_TYPE_SUCCEEDED     = 8;
+  LIFECYCLE_EVENT_TYPE_FAILED        = 9;
+}
+```
 
-> When a skill supports multiple domains/frameworks, organize by variant:
-> ```
-> cloud-deploy/
-> ├── SKILL.md (workflow + selection)
-> └── references/
->     ├── aws.md
->     ├── gcp.md
->     └── azure.md
-> ```
-> The agent reads only the relevant reference file.
+The three deprecated states (STARTED, IDLE, RESTARTED) collapsed into IN_PROGRESS and SUCCEEDED. "Restart is no longer distinguished from start" (verbatim comment) — a clean schema lesson.
 
-This is the **Read-on-demand variant resolver pattern** — used in Warp's `claude-api` skill (which has per-language references: `python/`, `typescript/`, `go/`, `java/`, etc., each its own subdirectory).
+Each event carries:
 
-## What ships in the bundle (Warp v0.2026.05.18)
+```protobuf
+message AgentEvent {
+  string event_id = 1;                            // idempotency
+  google.protobuf.Timestamp occurred_at = 2;
+  oneof event { LifecycleEvent lifecycle_event = 3; }
+
+  message LifecycleEvent {
+    string sender_agent_id = 1;
+    oneof detail {
+      Errored errored = 2;                        // { stage, reason, error_message }
+      Empty cancelled = 6;
+      Blocked blocked = 7;                        // { blocked_action }
+      Empty in_progress = 8;
+      Empty succeeded = 9;
+      Failed failed = 10;                         // { reason, error_message }
+    }
+  }
+}
+```
+
+**Errored vs Failed** — distinct: Errored is a pipeline stage failure (with `stage` + `reason`), Failed is a logical task failure (`reason` + `error_message`, no stage).
+
+**Blocked** is interesting: it carries `blocked_action` describing what the agent is stuck waiting on. Parent can choose to unblock by calling `SendMessageToAgent`.
+
+## The three spawn primitives (current)
+
+### `StartAgentV2` — spawn one child
+
+```protobuf
+message StartAgentV2 {
+  string name = 1;
+  string prompt = 2;
+  LifecycleSubscription lifecycle_subscription = 3;
+  ExecutionMode execution_mode = 4;
+
+  message LifecycleSubscription {
+    repeated LifecycleEventType event_types = 1;
+    // Empty list = subscribe to none. Omitted = subscribe to all.
+  }
+
+  message ExecutionMode {
+    oneof mode { Local local = 1; Remote remote = 2; }
+    message Local {
+      Harness harness = 1;                        // override per-child harness
+    }
+    message Remote {
+      string environment_id = 1;
+      repeated SkillRef skills = 2;               // pre-load remote skills
+      string model_id = 3;
+      bool computer_use_enabled = 4;
+      string worker_host = 5;
+      Harness harness = 6;
+      string title = 7;
+    }
+    message Harness { string type = 1; }          // "oz" or "claude" — STRING, not enum here
+  }
+}
+```
+
+Note: `ExecutionMode.Harness` is a **string-typed** harness (`"oz"`, `"claude"`, etc.), distinct from the enum `Harness` in `orchestration.proto`. This is the per-child override path; the orchestration enum is the plan-attached config path. Two parallel selection surfaces for the same concept.
+
+### `RunAgents` — spawn a swarm
+
+```protobuf
+message RunAgents {
+  message Local {}
+  message Remote {
+    string environment_id = 1;
+    string worker_host = 2;
+    bool computer_use_enabled = 3;
+  }
+  message AgentRunConfig {
+    string name = 1;          // unique within this batch
+    string prompt = 2;
+    string title = 3;
+  }
+  string summary = 1;                              // top-level human-readable
+  string base_prompt = 2;                          // shared across all children
+  repeated SkillRef skills = 3;                    // shared skill bundle
+  string model_id = 4;                             // shared
+  Harness harness = 5;                             // shared (enum form)
+  oneof execution_mode { Local local = 6; Remote remote = 7; }
+  repeated AgentRunConfig agent_run_configs = 8;   // ← the N children
+  string plan_id = 9;                              // for auto-launch matching
+}
+```
+
+Server rejects on `RunAgentsResult.Failure { error: "agent names must be non-empty and unique" }` if names collide. **Names are the correlation key** — `AgentOutcome.name` matches `AgentRunConfig.name`.
+
+### `RunAgentsResult` — three outcomes
+
+```protobuf
+message RunAgentsResult {
+  oneof outcome {
+    Launched launched = 1;                         // success — per-agent outcomes inside
+    Denied denied = 2;                             // user said no
+    Failure failure = 3;                           // server-side validation rejected
+  }
+
+  message Launched {
+    string resolved_model_id = 1;
+    Harness resolved_harness = 2;
+    oneof resolved_execution_mode { ... }
+    repeated AgentOutcome agents = 5;
+  }
+  message AgentOutcome {
+    string name = 1;
+    oneof result {
+      LaunchedAgent launched = 2;                  // { agent_id }
+      FailedAgent failed = 3;                      // { error }
+    }
+  }
+  message Denied { string reason = 1; }
+  message Failure { string error = 1; }
+}
+```
+
+**Per-agent partial failure is encoded inside `Launched`** — the call succeeded overall, but some individual children failed to spawn. `Failure` is reserved for validation rejections that prevent the call from even starting. This is the right way to model swarm spawns.
+
+## The deprecated `Subagent` (v0)
+
+```protobuf
+message Subagent {
+  string task_id = 1;
+  string payload = 2;
+  oneof metadata {
+    CLISubagent cli = 3;                           // wraps a shell command
+    Empty research = 4;
+    Empty advice = 5;
+    Empty computer_use = 6;
+    Empty summarization = 7;
+    ConversationSearchMetadata conversation_search = 8;
+    Empty warp_documentation_search = 9;
+  }
+}
+```
+
+The legacy `Subagent` had **7 specialized variants** baked into the protocol — research, advice, computer_use, summarization, etc. These all collapsed into the generic `StartAgent` → `StartAgentV2` → `RunAgents` model, where the variant is encoded in the prompt rather than the schema.
+
+This is a useful design lesson: specialized subagent types in the wire format become technical debt. Warp moved to "subagent = name + prompt + harness + execution mode" and pushed specialization to the prompt layer.
+
+## Where everything lives
 
 ```text
-Resources/bundled/
-├── metadata/version.json                          { "warp_version": "v0.2026.05.18.05.32.stable_02" }
-├── skills/                                        11 skills (Apache 2.0)
-│   ├── add-mcp-server/         (103 lines)        Add MCP server to Warp settings
-│   ├── change-keybinding/      ( 84 lines)        Modify Warp keybindings
-│   ├── claude-api/             (324 lines)        Anthropic API helper, 9-language code refs
-│   ├── create-skill/           (456 lines)        ★ Skill creator + optimizer (the meta-skill)
-│   ├── create-tab-config/      ( 29 lines)        New tab config from prompt
-│   ├── feedback/               (240 lines)        File feedback issues, resolve Warp version/platform
-│   ├── modify-settings/        ( 73 lines)        Update Warp settings.json
-│   ├── oz-platform/            (273 lines)        How to use Oz cloud-agent platform
-│   ├── pr-comments/            ( 65 lines)        Read + respond to PR review comments
-│   ├── tab-configs/            (263 lines)        Manage Warp tab configurations
-│   └── update-tab-config/      ( 25 lines)        Modify existing tab config
-└── mcp_skills/
-    └── figma/                                     8 sub-skills for Figma MCP integration
-        ├── edit-figma-design/
-        ├── figma-code-connect-components/
-        ├── figma-create-design-system-rules/
-        ├── figma-create-new-file/
-        ├── figma-generate-design/
-        ├── figma-generate-library/
-        ├── figma-implement-design/
-        └── figma-use/
+warp-proto-apis/apis/multi_agent/v1/
+├── orchestration.proto       67 lines   ← Harness enum, OrchestrationConfig, snapshot/status
+├── task.proto                1963       ← Task, ToolCall (35 tools), spawn primitives,
+│                                          AgentEvent + LifecycleEventType
+├── request.proto              577       ← Client → server request envelope
+├── response.proto             333       ← Server → client response envelope
+├── skill.proto                 64       ← SkillRef
+├── attachment.proto           162       ← File/image/diff attachments
+├── input_context.proto        149
+├── conversation_data.proto    ...
+├── citations.proto            ...
+├── todo.proto                  35
+├── lsp.proto                  ...
+├── file_content.proto          37
+├── document_content.proto     ...
+├── options.proto              ...
+└── suggestions.proto          ...
+
+warp/crates/ai/src/agent/
+├── mod.rs                              ← module root
+├── orchestration_config.rs             ← matches_active_config, approval status
+├── orchestration_config_tests.rs       ← test coverage of the match rule
+├── action/                             ← client-side action representations
+├── action_result/                      ← client-side result representations
+├── convert.rs                          ← proto ↔ client-type bridges
+├── citation.rs                         ← AIAgentCitation
+└── file_locations.rs                   ← FileLocations, group_file_contexts_for_display
+
+warp/crates/ai/                         25,384 lines of Rust across the AI crate
 ```
 
-Total in bundle: **1,935 lines of SKILL.md** across 11 skills (excluding `mcp_skills/figma/*` sub-skill SKILL.md files and `scripts/` Python).
+## What's not in the open code
 
-## The `create-skill` meta-skill
+A few things are referenced but their implementations live elsewhere:
 
-This is the central skill. Its job is to **create new skills + iteratively improve existing ones**.
+- **The harness clients** (Oz, ClaudeCode, OpenCode, Gemini, Codex). Warp ships only the orchestration protocol; the actual transport for each harness is a separate concern. The `claude_code` variant presumably wraps `claude -p` headless calls (consistent with the skill-bundle's `improve_description.py` pattern); `gemini` and `codex` similarly wrap those CLIs.
+- **The server-side agent runner.** The `worker_host` in `Remote` execution mode points at a Warp-managed worker; that worker's implementation isn't in the open source.
+- **The system prompt** for the lead agent. Skills are bundled (Apache 2.0) but the agent's base system prompt is fetched at runtime, not in the binary plaintext or the open repo.
 
-Three workflows:
+## Bottom line
 
-1. **Capture intent** — interview the user, write SKILL.md draft
-2. **Run + evaluate test cases** — spawn with-skill AND baseline runs in the same turn, grade with assertions, launch HTML viewer for human review
-3. **Improve loop** — read feedback, rewrite, re-run
+Warp's agentic flow is:
 
-Plus a **description optimization loop** (see `skill-optimization-loop.md` in this folder) that uses an LLM to rewrite the skill's `description:` field, scored against a trigger eval set.
+1. User chats with a **lead agent** in the terminal.
+2. Lead agent has a **35-tool surface** (see `tool-catalog.md`), four of which are spawn primitives.
+3. Spawning is **harness-aware** — the parent picks Oz / ClaudeCode / OpenCode / Gemini / Codex per spawn (or inherits from a plan-attached `OrchestrationConfig`).
+4. Children run **Local** or **Remote** with explicit `environment_id` + `worker_host` pinning.
+5. Children emit **lifecycle events**; parents subscribe to specific event types.
+6. Parents can **broadcast messages** to children (`SendMessageToAgent.addresses`) and **read other agents' conversations** (`FetchConversation`).
+7. **Skills** (Apache-2.0 markdown) are user-extensible content layered on top — orthogonal to the spawn machinery.
 
-The skill bundles:
-- `scripts/run_loop.py` — the optimization loop (328 lines)
-- `scripts/run_eval.py` — single eval run (310 lines), shells out to `claude -p`
-- `scripts/improve_description.py` — calls `claude -p` to rewrite the description (246 lines)
-- `scripts/aggregate_benchmark.py` — produces `benchmark.json` + `benchmark.md`
-- `scripts/generate_report.py` — HTML output
-- `scripts/package_skill.py` — bundle skill into `.skill` archive
-- `scripts/quick_validate.py` — pre-flight check
-- `agents/grader.md` — grader subagent prompt
-- `agents/comparator.md` — blind A/B comparator subagent prompt
-- `agents/analyzer.md` — post-hoc winner-analysis subagent prompt
-- `references/schemas.md` — JSON schemas for evals, grading, benchmarks
-- `assets/eval_review.html` — interactive HTML viewer template
-
-## Subprocess delegation to `claude -p`
-
-Verbatim from `improve_description.py`:
-
-```python
-def _call_claude(prompt: str, model: str | None, timeout: int = 300) -> str:
-    """Run `claude -p` with the prompt on stdin and return the text response.
-
-    Prompt goes over stdin (not argv) because it embeds the full SKILL.md
-    body and can easily exceed comfortable argv length.
-    """
-    cmd = ["claude", "-p", "--output-format", "text"]
-    if model:
-        cmd.extend(["--model", model])
-
-    # Remove CLAUDECODE env var to allow nesting claude -p inside an
-    # interactive session. The guard is for interactive terminal conflicts;
-    # programmatic subprocess usage is safe.
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-
-    result = subprocess.run(
-        cmd, input=prompt, capture_output=True, text=True,
-        env=env, timeout=timeout,
-    )
-```
-
-So when Warp's agent improves a skill description, it:
-1. Constructs a prompt that includes the full SKILL.md body + eval results
-2. Spawns `claude -p` as a subprocess
-3. Pipes the prompt over stdin
-4. Reads the rewritten description back from stdout
-
-The `--model` flag is forwarded so the optimization uses the SAME model that's powering the calling session — "so the triggering test matches what the user actually experiences" (verbatim from the SKILL.md).
-
-This pattern recurs in `run_eval.py` — the actual skill execution during eval runs is also delegated to `claude -p`.
-
-**Why this matters**: Warp is composing on top of Claude Code rather than reimplementing the agent loop. The Rust binary handles the terminal UI, blocks, and shell integration; Claude Code handles the actual agentic reasoning.
-
-## The three subagent roles (verbatim role definitions)
-
-### Grader
-
-> Evaluate expectations against an execution transcript and outputs.
->
-> The Grader reviews a transcript and output files, then determines whether each expectation passes or fails. Provide clear evidence for each judgment.
->
-> You have two jobs: grade the outputs, and critique the evals themselves. A passing grade on a weak assertion is worse than useless — it creates false confidence. When you notice an assertion that's trivially satisfied, or an important outcome that no assertion checks, say so.
-
-### Comparator (blind)
-
-> Compare two outputs WITHOUT knowing which skill produced them.
->
-> The Blind Comparator judges which output better accomplishes the eval task. You receive two outputs labeled A and B, but you do NOT know which skill produced which. This prevents bias toward a particular skill or approach.
->
-> Your judgment is based purely on output quality and task completion.
-
-### Analyzer
-
-> After the blind comparator determines a winner, the Post-hoc Analyzer "unblinds" the results by examining the skills and transcripts. The goal is to extract actionable insights: what made the winner better, and how can the loser be improved?
-
-Inputs to Analyzer: `winner`, `winner_skill_path`, `winner_transcript_path`, `loser_skill_path`, `loser_transcript_path`, `comparison_result_path`, `output_path`.
-
-This three-role pattern is essentially a **structured PR review**: Grader = lint/unit tests, Comparator = human review without seeing the author, Analyzer = post-merge retro.
-
-## Oz: the cloud-agent CLI
-
-`Resources/bin/oz` is a bash launcher (the actual binary is downloaded/elsewhere). `oz --help` output:
-
-```
-The orchestration platform for cloud agents
-
-The Oz CLI is a tool for running, managing, and orchestrating coding agents at scale.
-Use the CLI to:
-* Launch and inspect cloud agents
-* Schedule cloud agents to run in the future
-* Manage the environments that cloud agents run in
-* Upload secrets to Oz's secure storage
-
-Commands:
-  agent          Interact with Oz
-  environment    Manage cloud environments [aliases: e]
-  mcp            Manage MCP servers
-  run            Manage runs
-  model          Manage available models
-  login          Log in to Warp
-  logout         Log out of Warp
-```
-
-Plus subcommands referenced in the bundled `oz-platform` skill: schedule, secret, federate, harness-support, artifact, provider, integration.
-
-**Oz is the equivalent of Antigravity's Cascade RPCs and Cursor's `Task(subagent_type="...")`** — except as a separate command-line tool rather than an in-IDE agent surface. Implication: Warp users orchestrate background fleets via `oz`, while their interactive terminal session uses local skills.
-
-## What's NOT in the bundle
-
-The system prompt that runs *inside* the Warp app (the persona, base tool definitions, agent loop) is not in plaintext. Grepping the 373 MB Rust binary for prompt openings (`"You are..."`, etc.) returns nothing — the prompt is server-side. The 40 MB string table contains tool names (`task`, `grep`) but no agent persona literals.
-
-Compare:
-- **Antigravity** ships its system prompts as static string literals in `language_server` C++ binary (RE-able with `strings`)
-- **Cursor** ships its system prompts as JSX/template literals in `cursor-agent-exec/main.js` (RE-able after beautification)
-- **Warp** keeps its system prompts server-side. Only the skills (which are user-extensible content) are open.
-
-That's a deliberate design choice: Warp treats the agent persona as proprietary, but the skill format as a public standard.
-
-## Tool surface (inferred)
-
-From scripts that skills call: `claude` (Claude Code), `python`, `python -m scripts.X`, browser open. From the agent's own surface (visible in skill instructions): file read/write, shell exec, web fetch, "Task" subagent, "MCP" tools. Warp's own tool catalog isn't enumerated in the bundle — skills assume the tools by reference.
+This is more like a **kernel** for multi-agent orchestration than a single specific agent loop.
