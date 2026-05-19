@@ -26,6 +26,12 @@ parent agent
 | Verifier loop | Parent needs an independent second pass | [verifier-loop.md](patterns/verifier-loop.md) |
 | Runtime primitives | Design notes for building a swarm runtime | [runtime-primitives.md](patterns/runtime-primitives.md) |
 
+## Case studies
+
+| Subject | Patterns it composes | File |
+|---|---|---|
+| Google Antigravity IDE | tiered-hierarchical, flat-map-reduce, reviewer-swarm, verifier-loop, pipeline-handoff, background-hybrid + new sentinel-cron supervisor | [case-studies/google-antigravity](case-studies/google-antigravity/README.md) |
+
 ## Safety rules
 
 1. Use absolute paths in child prompts.
