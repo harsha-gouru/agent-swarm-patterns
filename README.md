@@ -22,6 +22,10 @@ Start here: [index.md](index.md)
 - [Google Antigravity](case-studies/google-antigravity/README.md) — how Google Deepmind's agentic IDE composes these patterns in a shipping product (six role-composed sub-agents, Sentinel cron supervisor, mandatory VICTORY AUDIT)
 - [Cursor "Grind"](case-studies/cursor/README.md) — how Cursor's swarm uses git itself as the coordination bus (Orchestrator → Planner → Workers, isolated clones, rebase-retry push, "only your commit survives")
 
+## Comparisons
+
+- [How agentic CLIs control subagents](case-studies/comparison-agent-control.md) — Claude Code vs Cursor vs Grok CLI vs Codex on the mechanics that actually matter: file-conflict isolation, context passing, mid-run stop/check/inspect, config surface, guardrails
+
 ## Core idea
 
 ```text

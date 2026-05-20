@@ -33,6 +33,12 @@ parent agent
 | Google Antigravity IDE | tiered-hierarchical, flat-map-reduce, reviewer-swarm, verifier-loop, pipeline-handoff, background-hybrid + new sentinel-cron supervisor | [case-studies/google-antigravity](case-studies/google-antigravity/README.md) |
 | Cursor "Grind" | tiered-hierarchical, flat-map-reduce, best-of-n-worktree, background-hybrid + new git-as-bus coordination | [case-studies/cursor](case-studies/cursor/README.md) |
 
+## Comparisons
+
+| Comparison | Covers | File |
+|---|---|---|
+| Agent control mechanics | Claude Code / Cursor / Grok CLI / Codex — file-conflict isolation, context passing, mid-run stop/check/inspect, config surface, guardrails | [comparison-agent-control.md](case-studies/comparison-agent-control.md) |
+
 ## Safety rules
 
 1. Use absolute paths in child prompts.
