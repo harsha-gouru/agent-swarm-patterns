@@ -23,6 +23,8 @@ Start here: [index.md](index.md)
 - [Cursor "Grind"](case-studies/cursor/README.md) — how Cursor's swarm uses git itself as the coordination bus (Orchestrator → Planner → Workers, isolated clones, rebase-retry push, "only your commit survives")
 - [Warp (Multi-Harness Orchestration)](case-studies/warp/README.md) — open-source meta-orchestrator that dispatches across 5 agent harnesses (Oz / ClaudeCode / OpenCode / Gemini / Codex), with plan-attached orchestration config + auto-launch matching, `LifecycleEventType` subscription, and a 35-tool agent surface
 - [Google Co-Scientist](case-studies/co-scientist/README.md) — published (Nature 2026) scientific-reasoning swarm: a Supervisor fans hypotheses to 6 specialized agents, an Elo tournament of pairwise scientific debates is the fitness function, and the Meta-review agent self-improves the system by appending learned critiques to every agent's prompt — no fine-tuning
+- [Cognition (Managed Devins)](case-studies/cognition/README.md) — stub: the most rigorously argued orchestration position — "don't build unstructured multi-agents", keep writes single-threaded, ship "map-reduce-and-manage" (coordinator + children in isolated VMs)
+- [Genspark (Mixture-of-Agents)](case-studies/genspark/README.md) — stub: the deliberate counterpoint — "less control, more tools", per-task routing across 9 LLMs + 80+ tools, no enforced tree or write isolation
 
 ## Comparisons
 
