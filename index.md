@@ -34,6 +34,12 @@ parent agent
 | Cursor "Grind" | tiered-hierarchical, flat-map-reduce, best-of-n-worktree, background-hybrid + new git-as-bus coordination | [case-studies/cursor](case-studies/cursor/README.md) |
 | Warp (Multi-Harness Orchestration) | flat-map-reduce, pipeline-handoff, background-hybrid, tiered-hierarchical + new multi-harness dispatch (Oz / ClaudeCode / OpenCode / Gemini / Codex) | [case-studies/warp](case-studies/warp/README.md) |
 
+## Comparisons
+
+| Comparison | Covers | File |
+|---|---|---|
+| Agent control mechanics | Claude Code / Cursor / Grok CLI / Codex — file-conflict isolation, context passing, mid-run stop/check/inspect, config surface, guardrails | [comparison-agent-control.md](case-studies/comparison-agent-control.md) |
+
 ## Safety rules
 
 1. Use absolute paths in child prompts.

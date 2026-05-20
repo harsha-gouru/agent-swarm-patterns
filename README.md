@@ -23,6 +23,10 @@ Start here: [index.md](index.md)
 - [Cursor "Grind"](case-studies/cursor/README.md) — how Cursor's swarm uses git itself as the coordination bus (Orchestrator → Planner → Workers, isolated clones, rebase-retry push, "only your commit survives")
 - [Warp (Multi-Harness Orchestration)](case-studies/warp/README.md) — open-source meta-orchestrator that dispatches across 5 agent harnesses (Oz / ClaudeCode / OpenCode / Gemini / Codex), with plan-attached orchestration config + auto-launch matching, `LifecycleEventType` subscription, and a 35-tool agent surface
 
+## Comparisons
+
+- [How agentic CLIs control subagents](case-studies/comparison-agent-control.md) — Claude Code vs Cursor vs Grok CLI vs Codex on the mechanics that actually matter: file-conflict isolation, context passing, mid-run stop/check/inspect, config surface, guardrails
+
 ## Core idea
 
 ```text
