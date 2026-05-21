@@ -15,6 +15,7 @@ Start here: [index.md](index.md)
 - [Pipeline handoff swarm](patterns/pipeline-handoff-swarm.md)
 - [Background hybrid swarm](patterns/background-hybrid-swarm.md)
 - [Verifier loop](patterns/verifier-loop.md)
+- [Security investigation swarm](patterns/security-investigation-swarm.md)
 - [Runtime primitives](patterns/runtime-primitives.md)
 
 ## Case studies

@@ -24,6 +24,7 @@ parent agent
 | Pipeline handoff | Work moves through research -> implementation -> review | [pipeline-handoff-swarm.md](patterns/pipeline-handoff-swarm.md) |
 | Background hybrid | Agents coordinate with long-running shell tasks | [background-hybrid-swarm.md](patterns/background-hybrid-swarm.md) |
 | Verifier loop | Parent needs an independent second pass | [verifier-loop.md](patterns/verifier-loop.md) |
+| Security investigation | Vulnerability triage / RE needs scout, parallel evidence lanes, verification, and finding writeup | [security-investigation-swarm.md](patterns/security-investigation-swarm.md) |
 | Runtime primitives | Design notes for building a swarm runtime | [runtime-primitives.md](patterns/runtime-primitives.md) |
 
 ## Case studies
