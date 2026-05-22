@@ -9,7 +9,7 @@ This compares four tools on exactly those mechanics:
 - **Grok CLI** 0.1.21x — xAI
 - **Codex CLI** 0.121.x — OpenAI
 
-All facts below are verified against the installed tools' configs, docs, and (for Cursor) the RE'd bundle. Verbatim snippets are quoted with their source path.
+All facts below are verified against the installed tools' configs, docs, and (for Cursor and Claude Code) the RE'd binary. Verbatim snippets are quoted with their source path.
 
 ---
 
@@ -21,11 +21,11 @@ All facts below are verified against the installed tools' configs, docs, and (fo
 
 | | Claude Code | Cursor Grind | Grok CLI | Codex CLI |
 |---|---|---|---|---|
-| Multi-agent? | Yes (Task tool) | Yes (Grind swarm) | Yes (`task` tool) | Not really |
+| Multi-agent? | Yes (Task tool + Workflow runtime) | Yes (Grind swarm) | Yes (`task` tool) | Not really |
 | File-conflict strategy | opt-in worktree | always-isolated git clones | opt-in git worktree | single agent + OS sandbox |
-| Context to child | fresh only | prompt + AGENTS.md + handoff | fresh / fork / resume | AGENTS.md |
-| Mid-run inspect | no | continuation hooks | **live Tasks Pane** | n/a |
-| Recursion | blocked | coordinator only | depth-limited | n/a |
+| Context to child | fresh **or** fork | prompt + AGENTS.md + handoff | fresh / fork / resume | AGENTS.md |
+| Mid-run inspect | no for subagents; task board + events for teammates | continuation hooks | **live Tasks Pane** | n/a |
+| Recursion | teammates can't recurse; workflows capped at 1000 agents | coordinator only | depth-limited | n/a |
 | Config format | YAML + JSON | bundle + manifests | TOML | TOML + JSON |
 
 ---
@@ -127,15 +127,14 @@ The convergent answer is **one git worktree per writing subagent**. If you're ha
 
 ## 2. What context to give a child
 
-### Claude Code — fresh only, brief like a stranger
+### Claude Code — fresh or fork (it has both)
 
-A subagent gets **only the prompt you write**. No conversation history, no parent state. Anthropic's own guidance (from the Agent tool description):
+The `Task`/`Agent` tool description (2.1.148) is explicit: *"specify a `subagent_type` to use a specialized agent, **or omit it to fork yourself — a fork inherits your full conversation context.**"* So there are two modes:
 
-> Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
->
-> **Never delegate understanding.** Don't write "based on your findings, fix the bug" ... Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+- **Fresh** (`subagent_type` set) — the child gets **only the prompt you write**. No history, no parent state. Anthropic's guidance: *"Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation."* No context pollution, but you carry the full briefing burden.
+- **Fork** (`subagent_type` omitted) — the child inherits the parent's **full conversation history**. The prompt is then a *directive* (what to do), not background. This is the equivalent of Grok's `fork_context`.
 
-This is a deliberate constraint: fresh context per child = no context pollution, but you carry the full briefing burden.
+Background spawns and named teammates are fresh-only. Earlier notes calling Claude Code "fresh only" predate the fork mode — it is no longer accurate.
 
 ### Cursor Grind — prompt + repo files + handoff
 
@@ -189,18 +188,22 @@ Never assume the child knows what you know. The most common orchestration bug is
 
 This is where the four differ most.
 
-### Claude Code — weakest. Block-and-wait.
+### Claude Code — depends on the layer
 
-You spawn, you wait. The parent receives **only the child's final return message** — intermediate tool calls are invisible. Two modes:
+Claude Code is no longer a single "spawn-and-wait" tool — control differs by which of its three layers you use (see [claude-code/architecture.md](claude-code/architecture.md)).
+
+**Layer 1 — subagents: block-and-wait.** You spawn, you wait. The parent receives **only the child's final return message** — intermediate tool calls are invisible.
 
 - **foreground** — parent blocks until the child returns.
-- **`run_in_background: true`** — parent continues; gets a notification on completion.
+- **`run_in_background: true`** — parent continues; gets a notification on completion. *"do NOT sleep, poll, or proactively check on its progress."*
 
-There is **no mid-run inspect, no poll, no pause**. From Anthropic's own tool docs:
+No mid-run inspect of a running subagent. Stop control exists only for *shell* background tasks (`KillShell`).
 
-> When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress.
+**Layer 2 — teammates: event-driven coordination.** Named teammates coordinate through a shared **task board** — `TaskCreate / TaskGet / TaskList / TaskUpdate` — where tasks carry `status`, an `owner` (agent id), and a `blockedBy` dependency graph. Lifecycle hook events (`TeammateIdle`, `TaskCreated`, `TaskCompleted`) let the parent (or a plugin) *subscribe* instead of poll. This is much closer to Cursor's lifecycle-hook model than to block-and-wait.
 
-Stop control exists only for *shell* background tasks (`KillShell`), not for subagents. Once a subagent is running, you cannot reach into it.
+**Layer 3 — workflows: a `SubagentStop` hook.** Inside the workflow runtime the parent is a script; it gates each child structurally via the `SubagentStop` hook and reads typed return values. Still no mid-*run* peek, but completion is fully programmable.
+
+So the older "weakest, block-and-wait" verdict only holds for Layer 1. With teammates, Claude Code has a real event-driven control surface.
 
 ### Cursor Grind — continuation policy + lifecycle hooks
 
@@ -259,11 +262,13 @@ approvals_reviewer = "user"
 The control spectrum:
 
 ```
-weakest ────────────────────────────────────────────────► strongest
-Claude Code        Codex           Cursor            Grok
-block-and-wait     approval gate   lifecycle hooks   live Tasks Pane
-final msg only     (1 agent)       + idle nudge      + depth limit
+weakest ────────────────────────────────────────────────────────────► strongest
+CC subagents     Codex           CC teammates / Cursor          Grok
+block-and-wait   approval gate   lifecycle hooks / task board   live Tasks Pane
+final msg only   (1 agent)       + idle events                  + depth limit
 ```
+
+Claude Code spans the spectrum: its Layer-1 subagents are the weakest control surface of any tool here, but its Layer-2 teammates (task board + `TeammateIdle`/`TaskCreated`/`TaskCompleted` events) sit alongside Cursor's lifecycle hooks. Only Grok's live Tasks Pane is clearly ahead.
 
 For a hand-rolled orchestrator, the minimum viable control surface is:
 
@@ -354,13 +359,14 @@ If you're designing your own: **one file per agent, with frontmatter for the mac
 
 | Guardrail | Claude Code | Cursor | Grok | Codex |
 |---|---|---|---|---|
-| Tool allowlist | `tools:` frontmatter | `toolsOverride` | capability mode | — |
-| Capability tiers | — | `permissionMode` (readonly / agent_only) | `read-only` / `read-write` / `execute` / `all` | — |
-| Recursion control | none given → can't recurse | `preserveTaskTool` (coordinator only) | configurable **depth limit** | n/a |
+| Tool allowlist | `tools:` frontmatter (+ `disallowedTools` denylist) | `toolsOverride` | capability mode | — |
+| Capability tiers | `permissionMode` (`default`/`plan`/`acceptEdits`/…) | `permissionMode` (readonly / agent_only) | `read-only` / `read-write` / `execute` / `all` | — |
+| Recursion control | teammates can't recurse; workflow **1000-agent lifetime cap** | `preserveTaskTool` (coordinator only) | configurable **depth limit** | n/a |
+| Turn / spend cap | `maxTurns`, `maxBudgetUsd`/`taskBudget`, workflow `budget.remaining()` | `maxLoops` | — | — |
 | Model lock | `model:` frontmatter | `forceDefaultModel` | `default_model` (overrides all) | `model` |
-| Fail-closed | — | — | missing persona → spawn fails | — |
-| OS sandbox | — | — | `~/.grok/docs/.../17-sandbox.md` | **Seatbelt / Landlock** |
-| Human approval | permission prompts | confirmation cards | — | `approval_policy` |
+| Fail-closed | invalid frontmatter / unknown `agentType` → spawn errors | — | missing persona → spawn fails | — |
+| OS sandbox | Linux seccomp sandbox (`[Sandbox Linux]`) | — | `~/.grok/docs/.../17-sandbox.md` | **Seatbelt / Landlock** |
+| Human approval | permission prompts; permission rules can deny `agent(agentType)` | confirmation cards | — | `approval_policy` |
 
 Two patterns worth stealing:
 
@@ -383,4 +389,6 @@ The parent's job is not to do the work. It's to **own the registry, own verifica
 
 ---
 
-*Verified against: Claude Code 2.1.145, Cursor 3.4.20 (`cursor-agent-exec` bundle), Grok CLI 0.1.211 (`~/.grok/docs/user-guide/15-subagents.md`), Codex CLI 0.121.0 (`~/.codex/config.toml`, `codex --help`). Cursor internals are RE'd; the other three are from shipped docs/configs.*
+*Verified against: Claude Code 2.1.148 (RE'd from the native binary — see [claude-code/](claude-code/README.md)), Cursor 3.4.20 (`cursor-agent-exec` bundle), Grok CLI 0.1.211 (`~/.grok/docs/user-guide/15-subagents.md`), Codex CLI 0.121.0 (`~/.codex/config.toml`, `codex --help`). Claude Code and Cursor internals are RE'd; Grok and Codex are from shipped docs/configs.*
+
+> **For the full Claude Code design** — the 3-layer architecture, agent-definition format, workflow runtime, and hook/guardrail surface — see the dedicated [Claude Code case study](claude-code/README.md). This comparison covers only the cross-tool axes.
