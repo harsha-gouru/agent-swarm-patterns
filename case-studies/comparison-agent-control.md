@@ -389,6 +389,6 @@ The parent's job is not to do the work. It's to **own the registry, own verifica
 
 ---
 
-*Verified against: Claude Code 2.1.148 (RE'd from the native binary — see [claude-code/](claude-code/README.md)), Cursor 3.4.20 (`cursor-agent-exec` bundle), Grok CLI 0.1.211 (`~/.grok/docs/user-guide/15-subagents.md`), Codex CLI 0.121.0 (`~/.codex/config.toml`, `codex --help`). Claude Code and Cursor internals are RE'd; Grok and Codex are from shipped docs/configs.*
+*Verified against: Claude Code 2.1.148 (RE'd from the native binary — see [claude-code/](claude-code/README.md)), Cursor 3.4.20 (`cursor-agent-exec` bundle), Grok CLI 0.1.214 (`~/.grok/docs/user-guide/16-subagents.md` + RE'd binary — see [grok-goal-mode/](grok-goal-mode/README.md)), Codex CLI 0.121.0 (`~/.codex/config.toml`, `codex --help`). Claude Code, Cursor, and Grok Goal-mode internals are RE'd; the rest are from shipped docs/configs.*
 
-> **For the full Claude Code design** — the 3-layer architecture, agent-definition format, workflow runtime, and hook/guardrail surface — see the dedicated [Claude Code case study](claude-code/README.md). This comparison covers only the cross-tool axes.
+> **For the full Claude Code design** — the 3-layer architecture, agent-definition format, workflow runtime, and hook/guardrail surface — see the dedicated [Claude Code case study](claude-code/README.md). For Grok's productized verifier-gated swarm, see the [Grok Goal Mode case study](grok-goal-mode/README.md). This comparison covers only the cross-tool axes.
