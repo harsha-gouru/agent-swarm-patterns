@@ -16,7 +16,7 @@ Bundles:
 - 1 reference (`references/schemas.md` — JSON schemas for evals, grading, benchmarks)
 - HTML viewer template (`assets/eval_review.html`)
 
-Detailed in [skill-optimization-loop.md](skill-optimization-loop.md).
+This bundle is itself a self-contained skill-optimization loop (generate → eval → grade → improve → benchmark → report).
 
 ### `claude-api` — Anthropic SDK helper (324 lines)
 
